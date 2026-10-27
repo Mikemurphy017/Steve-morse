@@ -1,7 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { Columns3, Contact, Home, LogOut, Settings, Table, Upload, X } from 'lucide-react'
-import { dismissSaveError, useAppState } from '../lib/store'
-import { api } from '../lib/api'
+import { Columns3, Contact, Home, LogOut, Settings, ShieldCheck, Table, Upload, X } from 'lucide-react'
+import { dismissSaveError, logout, useAppState } from '../lib/store'
 
 const NAV = [
   { to: '/', label: 'Home', icon: Home, end: true },
@@ -25,13 +24,9 @@ function Brand() {
   )
 }
 
-async function signOut() {
-  await api('/logout', { method: 'POST' })
-  location.reload()
-}
-
 export default function Layout() {
-  const { saveError, passwordRequired } = useAppState()
+  const { saveError, user } = useAppState()
+  const nav = user?.role === 'admin' ? [...NAV, { to: '/admin', label: 'Admin', icon: ShieldCheck, end: false }] : NAV
   return (
     <div className="min-h-screen md:flex">
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
@@ -39,7 +34,7 @@ export default function Layout() {
           <Brand />
         </div>
         <nav className="flex-1 space-y-1 p-3">
-          {NAV.map(({ to, label, icon: Icon, end }) => (
+          {nav.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
@@ -55,11 +50,17 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
-        {passwordRequired && (
-        <button onClick={signOut} className="m-3 flex items-center gap-3 rounded-xl px-4 py-3 text-[15px] font-medium text-slate-500 hover:bg-slate-100">
-          <LogOut className="h-5 w-5" /> Sign out
-        </button>
-        )}
+        <div className="border-t border-slate-100 p-3">
+          <div className="truncate px-4 pt-2 text-sm text-slate-500" title={user?.email}>
+            {user?.email}
+          </div>
+          <button
+            onClick={logout}
+            className="mt-1 flex w-full items-center gap-3 rounded-xl px-4 py-3 text-[15px] font-medium text-slate-600 hover:bg-slate-100"
+          >
+            <LogOut className="h-5 w-5" /> Sign out
+          </button>
+        </div>
       </aside>
 
       {/* Mobile top bar */}
@@ -68,7 +69,7 @@ export default function Layout() {
           <Brand />
         </div>
         <nav className="flex gap-1 overflow-x-auto px-2 pb-2">
-          {NAV.map(({ to, label, end }) => (
+          {nav.map(({ to, label, end }) => (
             <NavLink
               key={to}
               to={to}
@@ -82,6 +83,9 @@ export default function Layout() {
               {label}
             </NavLink>
           ))}
+          <button onClick={logout} className="whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600">
+            Sign out
+          </button>
         </nav>
       </header>
 

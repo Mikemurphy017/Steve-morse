@@ -30,6 +30,8 @@ export default function Gate({ children }: { children: React.ReactNode }) {
 }
 
 function LoginForm() {
+  const { setupNeeded, adminEmail } = useAppState()
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -41,7 +43,7 @@ function LoginForm() {
         setBusy(true)
         setError('')
         try {
-          await login(password)
+          await login(email, password)
         } catch (err) {
           setError(err instanceof Error ? err.message : 'Sign-in failed')
           setBusy(false)
@@ -57,10 +59,24 @@ function LoginForm() {
           <div className="text-sm text-slate-400">Sales CRM</div>
         </div>
       </div>
-      <label className="label mt-6">Password</label>
-      <input className="input" type="password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} />
+      {setupNeeded && (
+        <p className="mt-6 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          No accounts exist yet. Set <code>ADMIN_PASSWORD</code> on the server to create the admin account for {adminEmail}.
+        </p>
+      )}
+      <label htmlFor="login-email" className="label mt-6">Email</label>
+      <input id="login-email" className="input" type="email" autoComplete="username" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />
+      <label htmlFor="login-password" className="label mt-4">Password</label>
+      <input
+        id="login-password"
+        className="input"
+        type="password"
+        autoComplete="current-password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-      <button className="btn-primary mt-5 w-full" disabled={busy || !password}>
+      <button className="btn-primary mt-5 w-full" disabled={busy || !email || !password}>
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign in'}
       </button>
     </form>

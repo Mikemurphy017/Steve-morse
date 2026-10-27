@@ -1,67 +1,138 @@
-import crypto from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
 import * as db from './db.js'
+import * as auth from './auth.js'
 import { draftEmail } from './email.js'
 
 const PORT = Number(process.env.PORT) || 3000
-const APP_PASSWORD = process.env.APP_PASSWORD || ''
 const DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist')
-const COOKIE = 'leadflow_session'
 const SETTINGS_FIELDS = ['ownerName', 'calendlyUrl']
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const app = express()
 app.set('trust proxy', 1)
 app.use(express.json({ limit: '10mb' }))
 
-// --- Auth: optional single shared password (set APP_PASSWORD) ---------------
+const wrap = (fn) => (req, res, next) => fn(req, res).catch(next)
 
-const sessionToken = () => crypto.createHmac('sha256', APP_PASSWORD).update('leadflow-session').digest('hex')
+// --- Sign-in -------------------------------------------------------------------
 
-function hasSession(req) {
-  if (!APP_PASSWORD) return true
-  const cookie = (req.headers.cookie || '').split(/;\s*/).find((c) => c.startsWith(`${COOKIE}=`))
-  const value = cookie?.slice(COOKIE.length + 1) ?? ''
-  const expected = sessionToken()
-  return value.length === expected.length && crypto.timingSafeEqual(Buffer.from(value), Buffer.from(expected))
-}
+app.get(
+  '/api/session',
+  wrap(async (req, res) => {
+    const user = await auth.sessionUser(req)
+    res.json({ user, setupNeeded: !user && !(await auth.hasAnyUser()), adminEmail: auth.ADMIN_EMAIL })
+  }),
+)
 
-app.get('/api/session', (req, res) => {
-  res.json({ authenticated: hasSession(req), passwordRequired: Boolean(APP_PASSWORD) })
-})
+app.post(
+  '/api/login',
+  wrap(async (req, res) => {
+    if (auth.tooManyAttempts(req.ip)) return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' })
+    const result = await auth.login(req.body?.email ?? '', req.body?.password ?? '')
+    if (!result) {
+      auth.recordFailure(req.ip)
+      return res.status(401).json({ error: 'Wrong email or password' })
+    }
+    auth.clearFailures(req.ip)
+    res.cookie(auth.COOKIE, result.token, { httpOnly: true, sameSite: 'lax', secure: req.secure, maxAge: result.maxAge })
+    res.json({ user: result.user })
+  }),
+)
 
-app.post('/api/login', (req, res) => {
-  const given = String(req.body?.password ?? '')
-  const ok =
-    APP_PASSWORD &&
-    given.length === APP_PASSWORD.length &&
-    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(APP_PASSWORD))
-  if (!ok) return res.status(401).json({ error: 'Wrong password' })
-  res.cookie(COOKIE, sessionToken(), {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: req.secure,
-    maxAge: 1000 * 60 * 60 * 24 * 90,
-  })
-  res.json({ ok: true })
-})
-
-app.post('/api/logout', (_req, res) => {
-  res.clearCookie(COOKIE)
-  res.json({ ok: true })
-})
+app.post(
+  '/api/logout',
+  wrap(async (req, res) => {
+    await auth.logout(req)
+    res.clearCookie(auth.COOKIE)
+    res.json({ ok: true })
+  }),
+)
 
 app.get('/api/health', async (_req, res) => {
   await db.pool.query('SELECT 1')
   res.json({ ok: true })
 })
 
-app.use('/api', (req, res, next) => (hasSession(req) ? next() : res.status(401).json({ error: 'Not signed in' })))
+// Everything below requires a signed-in user.
+app.use('/api', (req, res, next) => {
+  auth
+    .sessionUser(req)
+    .then((user) => {
+      if (!user) return res.status(401).json({ error: 'Not signed in' })
+      req.user = user
+      next()
+    })
+    .catch(next)
+})
+
+app.post(
+  '/api/me/password',
+  wrap(async (req, res) => {
+    const { currentPassword, newPassword } = req.body ?? {}
+    if (!(await auth.checkPassword(req.user.id, currentPassword))) return res.status(400).json({ error: 'Current password is wrong' })
+    const problem = auth.validatePassword(newPassword)
+    if (problem) return res.status(400).json({ error: problem })
+    await auth.updateUser(req.user.id, { password: newPassword }) // signs out every session, including this one
+    const result = await auth.login(req.user.email, newPassword)
+    res.cookie(auth.COOKIE, result.token, { httpOnly: true, sameSite: 'lax', secure: req.secure, maxAge: result.maxAge })
+    res.json({ ok: true })
+  }),
+)
+
+// --- Admin: manage users ---------------------------------------------------------
+
+const adminOnly = (req, res, next) => (req.user.role === 'admin' ? next() : res.status(403).json({ error: 'Admins only' }))
+
+app.get('/api/users', adminOnly, wrap(async (_req, res) => res.json(await auth.listUsers())))
+
+app.post(
+  '/api/users',
+  adminOnly,
+  wrap(async (req, res) => {
+    const { email, name, role = 'member', password } = req.body ?? {}
+    if (!EMAIL_RE.test(String(email ?? '').trim())) return res.status(400).json({ error: 'Enter a valid email address' })
+    if (!['admin', 'member'].includes(role)) return res.status(400).json({ error: 'Invalid role' })
+    const problem = auth.validatePassword(password)
+    if (problem) return res.status(400).json({ error: problem })
+    try {
+      res.status(201).json(await auth.createUser({ email, name, role, password }))
+    } catch (e) {
+      if (e.code === '23505') return res.status(409).json({ error: 'A user with that email already exists' })
+      throw e
+    }
+  }),
+)
+
+app.patch(
+  '/api/users/:id',
+  adminOnly,
+  wrap(async (req, res) => {
+    const { name, role, password } = req.body ?? {}
+    const target = await auth.getUser(req.params.id)
+    if (!target) return res.status(404).json({ error: 'User not found' })
+    if (role !== undefined && !['admin', 'member'].includes(role)) return res.status(400).json({ error: 'Invalid role' })
+    if (role === 'member' && target.role === 'admin' && (await auth.countAdmins()) <= 1)
+      return res.status(400).json({ error: 'There must be at least one admin' })
+    if (password !== undefined) {
+      const problem = auth.validatePassword(password)
+      if (problem) return res.status(400).json({ error: problem })
+    }
+    res.json(await auth.updateUser(req.params.id, { name, role, password }))
+  }),
+)
+
+app.delete(
+  '/api/users/:id',
+  adminOnly,
+  wrap(async (req, res) => {
+    if (req.params.id === req.user.id) return res.status(400).json({ error: "You can't remove your own account" })
+    ;(await auth.deleteUser(req.params.id)) ? res.status(204).end() : res.status(404).json({ error: 'User not found' })
+  }),
+)
 
 // --- Leads -------------------------------------------------------------------
-
-const wrap = (fn) => (req, res, next) => fn(req, res).catch(next)
 
 app.get('/api/leads', wrap(async (_req, res) => res.json(await db.listLeads())))
 
@@ -137,4 +208,6 @@ app.use(express.static(DIST, { index: false }))
 app.get('*', (_req, res) => res.sendFile(path.join(DIST, 'index.html')))
 
 await db.migrate()
-app.listen(PORT, () => console.log(`LeadFlow listening on :${PORT}${APP_PASSWORD ? ' (password protected)' : ''}`))
+await auth.migrateAuth()
+await auth.ensureAdmin()
+app.listen(PORT, () => console.log(`LeadFlow listening on :${PORT}`))

@@ -53,3 +53,12 @@ export interface Settings {
   calendlyUrl: string
   aiEnabled: boolean // true when the server has ANTHROPIC_API_KEY set
 }
+
+export interface User {
+  id: string
+  email: string
+  name: string
+  role: 'admin' | 'member'
+  createdAt: string
+  lastLoginAt: string | null
+}

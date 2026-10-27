@@ -11,14 +11,19 @@ Set these variables on the app service:
 | Variable | Required | Value |
 | --- | --- | --- |
 | `DATABASE_URL` | yes | `${{Postgres.DATABASE_URL}}` (reference to the Postgres service) |
-| `APP_PASSWORD` | strongly recommended | Shared password for signing in. Without it, anyone with the URL can see your leads. |
+| `ADMIN_PASSWORD` | yes, for first start | Initial password for the admin account (`mike@bluestonepartnersllc.com`). Used only to create that account if it doesn't exist; change it later in *Settings*. |
+| `ADMIN_EMAIL` | optional | Override the admin account's email. |
 | `ANTHROPIC_API_KEY` | optional | Turns on AI-written follow-up emails. Without it, drafts use a template. |
+
+## Users
+
+Everyone signs in with an email and password. The admin manages accounts on the **Admin** page: add users (with a generated temporary password), reset passwords, switch people between *Member* and *Admin*, and remove access. All users share the same leads. Anyone can change their own password in *Settings*.
 
 ## Local development
 
 ```bash
 npm install
-DATABASE_URL=postgres://… npm run server   # API on :3000
+DATABASE_URL=postgres://… ADMIN_PASSWORD=… npm run server   # API on :3000
 npm run dev                                # frontend on :5173, proxies /api to :3000
 ```
 

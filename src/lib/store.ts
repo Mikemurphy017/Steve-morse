@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { Lead, Settings } from './types'
+import type { Lead, Settings, User } from './types'
 import { api, ApiError } from './api'
 
 // Leads saved by the earlier browser-only version of the app; uploaded once, then cleared.
@@ -16,13 +16,15 @@ export type Status = 'loading' | 'login' | 'ready' | 'error'
 interface State {
   status: Status
   loadError: string
-  passwordRequired: boolean
+  user: User | null
+  setupNeeded: boolean
+  adminEmail: string
   saveError: string
   leads: Lead[]
   settings: Settings
 }
 
-let state: State = { status: 'loading', loadError: '', passwordRequired: false, saveError: '', leads: [], settings: DEFAULT_SETTINGS }
+let state: State = { status: 'loading', loadError: '', user: null, setupNeeded: false, adminEmail: '', saveError: '', leads: [], settings: DEFAULT_SETTINGS }
 const listeners = new Set<() => void>()
 
 function set(patch: Partial<State>) {
@@ -65,9 +67,9 @@ export function dismissSaveError() {
 export async function init() {
   set({ status: 'loading', loadError: '' })
   try {
-    const session = await api<{ authenticated: boolean; passwordRequired: boolean }>('/session')
-    set({ passwordRequired: session.passwordRequired })
-    if (!session.authenticated) return set({ status: 'login' })
+    const session = await api<{ user: User | null; setupNeeded: boolean; adminEmail: string }>('/session')
+    set({ user: session.user, setupNeeded: session.setupNeeded, adminEmail: session.adminEmail })
+    if (!session.user) return set({ status: 'login' })
     const [leads, settings] = await Promise.all([api<Lead[]>('/leads'), api<Partial<Settings>>('/settings')])
     set({ status: 'ready', leads, settings: { ...DEFAULT_SETTINGS, ...settings } })
     await migrateLegacyLeads()
@@ -76,9 +78,14 @@ export async function init() {
   }
 }
 
-export async function login(password: string) {
-  await api('/login', { method: 'POST', json: { password } })
+export async function login(email: string, password: string) {
+  await api('/login', { method: 'POST', json: { email, password } })
   await init()
+}
+
+export async function logout() {
+  await api('/logout', { method: 'POST' })
+  location.assign('/')
 }
 
 async function migrateLegacyLeads() {

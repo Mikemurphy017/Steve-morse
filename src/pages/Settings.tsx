@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Download, Upload } from 'lucide-react'
 import { replaceAllLeads, updateSettings, useLeads, useSettings } from '../lib/store'
 import type { Lead } from '../lib/types'
+import { api } from '../lib/api'
 
 export default function SettingsPage() {
   const settings = useSettings()
@@ -105,6 +106,42 @@ export default function SettingsPage() {
           />
         </div>
       </section>
+      <ChangePassword />
     </div>
+  )
+}
+
+function ChangePassword() {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
+  return (
+    <form
+      className="card mt-6 space-y-4 p-6"
+      onSubmit={async (e) => {
+        e.preventDefault()
+        setMessage(null)
+        try {
+          await api('/me/password', { method: 'POST', json: { currentPassword: current, newPassword: next } })
+          setCurrent('')
+          setNext('')
+          setMessage({ ok: true, text: 'Password changed. Other devices have been signed out.' })
+        } catch (err) {
+          setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) })
+        }
+      }}
+    >
+      <h2 className="section-title">Change password</h2>
+      <div>
+        <label className="label">Current password</label>
+        <input className="input" type="password" autoComplete="current-password" required value={current} onChange={(e) => setCurrent(e.target.value)} />
+      </div>
+      <div>
+        <label className="label">New password</label>
+        <input className="input" type="password" autoComplete="new-password" minLength={8} required value={next} onChange={(e) => setNext(e.target.value)} />
+      </div>
+      {message && <p className={`text-sm ${message.ok ? 'text-emerald-700' : 'text-red-600'}`}>{message.text}</p>}
+      <button className="btn-secondary">Change password</button>
+    </form>
   )
 }

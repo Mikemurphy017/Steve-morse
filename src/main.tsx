@@ -10,6 +10,7 @@ import LeadsPage from './pages/Leads'
 import LeadDetailPage from './pages/LeadDetail'
 import UploadPage from './pages/Upload'
 import SettingsPage from './pages/Settings'
+import AdminPage from './pages/Admin'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -23,6 +24,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="leads/:id" element={<LeadDetailPage />} />
             <Route path="upload" element={<UploadPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="admin" element={<AdminPage />} />
           </Route>
         </Routes>
       </Gate>
