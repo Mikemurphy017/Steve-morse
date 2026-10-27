@@ -20,11 +20,10 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { deleteLead, uid, updateLead, useLead, useSettings } from '../lib/store'
+import { deleteLead, draftEmail, uid, updateLead, useLead, useSettings } from '../lib/store'
 import type { Lead, Message, StageId } from '../lib/types'
 import { STAGES } from '../lib/types'
 import { followUpBucket, todayISO } from '../lib/dates'
-import { aiDraft, templateDraft } from '../lib/email'
 import { StageBadge } from '../components/Badges'
 import LeadFormModal from '../components/LeadFormModal'
 
@@ -354,16 +353,13 @@ function EmailDraftCard({ lead }: { lead: Lead }) {
 
   const generate = async () => {
     setError('')
-    if (!settings.anthropicApiKey) {
-      setDraft(templateDraft(lead, settings))
-      return
-    }
     setLoading(true)
     try {
-      setDraft(await aiDraft(lead, settings))
+      const res = await draftEmail(lead.id)
+      setDraft(res.draft)
+      if (res.error) setError(res.error)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
-      setDraft(templateDraft(lead, settings))
     } finally {
       setLoading(false)
     }
@@ -390,10 +386,10 @@ function EmailDraftCard({ lead }: { lead: Lead }) {
       {!draft && (
         <p className="mt-3 text-sm italic text-slate-400">
           Generate a personalized follow-up email based on {lead.name}'s conversation history and notes.
-          {!settings.anthropicApiKey && ' (Add a Claude API key in Settings for AI-written drafts.)'}
+          {!settings.aiEnabled && ' (Uses a template until ANTHROPIC_API_KEY is set on the server.)'}
         </p>
       )}
-      {error && <p className="mt-3 text-sm text-red-600">{error} — showing a template draft instead.</p>}
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       {draft && (
         <>
           <textarea className="input mt-4 min-h-[260px] text-sm" value={draft} onChange={(e) => setDraft(e.target.value)} />

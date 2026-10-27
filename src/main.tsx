@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import './index.css'
 import Layout from './components/Layout'
+import Gate from './components/Gate'
 import HomePage from './pages/Home'
 import PipelinePage from './pages/Pipeline'
 import LeadsPage from './pages/Leads'
@@ -13,16 +14,18 @@ import SettingsPage from './pages/Settings'
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route index element={<HomePage />} />
-          <Route path="pipeline" element={<PipelinePage />} />
-          <Route path="leads" element={<LeadsPage />} />
-          <Route path="leads/:id" element={<LeadDetailPage />} />
-          <Route path="upload" element={<UploadPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-        </Route>
-      </Routes>
+      <Gate>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route index element={<HomePage />} />
+            <Route path="pipeline" element={<PipelinePage />} />
+            <Route path="leads" element={<LeadsPage />} />
+            <Route path="leads/:id" element={<LeadDetailPage />} />
+            <Route path="upload" element={<UploadPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+          </Route>
+        </Routes>
+      </Gate>
     </BrowserRouter>
   </React.StrictMode>,
 )

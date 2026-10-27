@@ -51,5 +51,5 @@ export interface Lead {
 export interface Settings {
   ownerName: string
   calendlyUrl: string
-  anthropicApiKey: string
+  aiEnabled: boolean // true when the server has ANTHROPIC_API_KEY set
 }

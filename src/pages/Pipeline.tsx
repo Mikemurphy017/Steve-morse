@@ -93,7 +93,7 @@ export default function PipelinePage() {
           onClose={() => setAdding(false)}
           onSave={(v) => {
             const lead = newLead(v)
-            addLeads([lead])
+            addLeads([lead]).catch(() => {}) // failure is shown in the save-error banner
             navigate(`/leads/${lead.id}`)
           }}
         />

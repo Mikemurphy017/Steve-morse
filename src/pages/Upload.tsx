@@ -25,6 +25,7 @@ export default function UploadPage() {
   const [stage, setStage] = useState<StageId>('new')
   const [dragging, setDragging] = useState(false)
   const [error, setError] = useState('')
+  const [importing, setImporting] = useState(false)
   const [imported, setImported] = useState<{ added: number; skipped: number } | null>(null)
 
   const handleFile = async (file: File | undefined) => {
@@ -45,7 +46,7 @@ export default function UploadPage() {
   const keyOf = (r: { name: string; email: string; linkedin: string }) =>
     (r.email || r.linkedin.replace(/\/+$/, '') || r.name).toLowerCase()
 
-  const doImport = () => {
+  const doImport = async () => {
     if (!result) return
     const seen = new Set(existing.map(keyOf))
     const fresh = result.rows.filter((r) => {
@@ -54,9 +55,16 @@ export default function UploadPage() {
       seen.add(k)
       return true
     })
-    addLeads(fresh.map((r) => newLead({ ...r, name: r.name || r.email || 'Unknown', stage })))
-    setImported({ added: fresh.length, skipped: result.rows.length - fresh.length })
-    setResult(null)
+    setImporting(true)
+    try {
+      await addLeads(fresh.map((r) => newLead({ ...r, name: r.name || r.email || 'Unknown', stage })))
+      setImported({ added: fresh.length, skipped: result.rows.length - fresh.length })
+      setResult(null)
+    } catch (e) {
+      setError(`Import failed: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setImporting(false)
+    }
   }
 
   return (
@@ -167,8 +175,8 @@ export default function UploadPage() {
                 ))}
               </select>
             </div>
-            <button className="btn-primary" onClick={doImport}>
-              Import {result.rows.length} leads
+            <button className="btn-primary" onClick={doImport} disabled={importing}>
+              {importing ? 'Importing…' : `Import ${result.rows.length} leads`}
             </button>
             <button className="btn-secondary" onClick={() => setResult(null)}>
               Cancel

@@ -1,31 +1,32 @@
 import { useSyncExternalStore } from 'react'
 import type { Lead, Settings } from './types'
+import { api, ApiError } from './api'
 
-const LEADS_KEY = 'leadflow.leads.v1'
-const SETTINGS_KEY = 'leadflow.settings.v1'
+// Leads saved by the earlier browser-only version of the app; uploaded once, then cleared.
+const LEGACY_LEADS_KEY = 'leadflow.leads.v1'
 
 const DEFAULT_SETTINGS: Settings = {
   ownerName: 'Steve',
   calendlyUrl: 'https://calendly.com/steve-morse-seatonhill',
-  anthropicApiKey: '',
+  aiEnabled: false,
 }
 
-function load<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key)
-    return raw ? (JSON.parse(raw) as T) : fallback
-  } catch {
-    return fallback
-  }
+export type Status = 'loading' | 'login' | 'ready' | 'error'
+
+interface State {
+  status: Status
+  loadError: string
+  passwordRequired: boolean
+  saveError: string
+  leads: Lead[]
+  settings: Settings
 }
 
-let leads: Lead[] = load<Lead[]>(LEADS_KEY, [])
-let settings: Settings = { ...DEFAULT_SETTINGS, ...load<Partial<Settings>>(SETTINGS_KEY, {}) }
+let state: State = { status: 'loading', loadError: '', passwordRequired: false, saveError: '', leads: [], settings: DEFAULT_SETTINGS }
 const listeners = new Set<() => void>()
 
-function emit() {
-  localStorage.setItem(LEADS_KEY, JSON.stringify(leads))
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+function set(patch: Partial<State>) {
+  state = { ...state, ...patch }
   listeners.forEach((l) => l())
 }
 
@@ -34,27 +35,70 @@ function subscribe(l: () => void) {
   return () => listeners.delete(l)
 }
 
-// Keep tabs in sync.
-window.addEventListener('storage', (e) => {
-  if (e.key === LEADS_KEY || e.key === SETTINGS_KEY) {
-    leads = load<Lead[]>(LEADS_KEY, [])
-    settings = { ...DEFAULT_SETTINGS, ...load<Partial<Settings>>(SETTINGS_KEY, {}) }
-    listeners.forEach((l) => l())
-  }
-})
+function reportSaveError(e: unknown) {
+  if (e instanceof ApiError && e.status === 401) return set({ status: 'login' })
+  set({ saveError: e instanceof Error ? e.message : String(e) })
+}
+
+export function useAppState() {
+  return useSyncExternalStore(subscribe, () => state)
+}
 
 export function useLeads(): Lead[] {
-  return useSyncExternalStore(subscribe, () => leads)
+  return useSyncExternalStore(subscribe, () => state.leads)
 }
 
 export function useLead(id: string | undefined): Lead | undefined {
-  const all = useLeads()
-  return all.find((l) => l.id === id)
+  return useLeads().find((l) => l.id === id)
 }
 
 export function useSettings(): Settings {
-  return useSyncExternalStore(subscribe, () => settings)
+  return useSyncExternalStore(subscribe, () => state.settings)
 }
+
+export function dismissSaveError() {
+  set({ saveError: '' })
+}
+
+// --- Loading & auth -----------------------------------------------------------
+
+export async function init() {
+  set({ status: 'loading', loadError: '' })
+  try {
+    const session = await api<{ authenticated: boolean; passwordRequired: boolean }>('/session')
+    set({ passwordRequired: session.passwordRequired })
+    if (!session.authenticated) return set({ status: 'login' })
+    const [leads, settings] = await Promise.all([api<Lead[]>('/leads'), api<Partial<Settings>>('/settings')])
+    set({ status: 'ready', leads, settings: { ...DEFAULT_SETTINGS, ...settings } })
+    await migrateLegacyLeads()
+  } catch (e) {
+    set({ status: 'error', loadError: e instanceof Error ? e.message : String(e) })
+  }
+}
+
+export async function login(password: string) {
+  await api('/login', { method: 'POST', json: { password } })
+  await init()
+}
+
+async function migrateLegacyLeads() {
+  let legacy: Lead[] = []
+  try {
+    legacy = JSON.parse(localStorage.getItem(LEGACY_LEADS_KEY) || '[]')
+  } catch {
+    /* ignore unreadable legacy data */
+  }
+  if (!Array.isArray(legacy) || legacy.length === 0) return
+  const known = new Set(state.leads.map((l) => l.id))
+  const fresh = legacy.filter((l) => !known.has(l.id))
+  if (fresh.length) {
+    const saved = await api<Lead[]>('/leads', { method: 'POST', json: fresh })
+    set({ leads: [...saved, ...state.leads] })
+  }
+  localStorage.removeItem(LEGACY_LEADS_KEY)
+}
+
+// --- Leads ----------------------------------------------------------------------
 
 export function uid(): string {
   return crypto.randomUUID()
@@ -86,28 +130,81 @@ export function newLead(input: LeadInput): Lead {
   }
 }
 
-export function addLeads(items: Lead[]) {
-  leads = [...items, ...leads]
-  emit()
+export async function addLeads(items: Lead[]) {
+  set({ leads: [...items, ...state.leads] })
+  try {
+    await api('/leads', { method: 'POST', json: items })
+  } catch (e) {
+    const ids = new Set(items.map((l) => l.id))
+    set({ leads: state.leads.filter((l) => !ids.has(l.id)) })
+    reportSaveError(e)
+    throw e
+  }
+}
+
+// Edits are applied locally right away and sent to the server in batches, so typing
+// in a text field doesn't fire a request per keystroke.
+const pending = new Map<string, Partial<Lead>>()
+const timers = new Map<string, ReturnType<typeof setTimeout>>()
+
+async function flush(id: string) {
+  clearTimeout(timers.get(id))
+  timers.delete(id)
+  const patch = pending.get(id)
+  pending.delete(id)
+  if (!patch) return
+  try {
+    await api(`/leads/${id}`, { method: 'PATCH', json: patch })
+  } catch (e) {
+    reportSaveError(e)
+  }
 }
 
 export function updateLead(id: string, patch: Partial<Lead>) {
-  leads = leads.map((l) => (l.id === id ? { ...l, ...patch, updatedAt: new Date().toISOString() } : l))
-  emit()
+  set({ leads: state.leads.map((l) => (l.id === id ? { ...l, ...patch, updatedAt: new Date().toISOString() } : l)) })
+  pending.set(id, { ...pending.get(id), ...patch })
+  clearTimeout(timers.get(id))
+  timers.set(id, setTimeout(() => flush(id), 500))
 }
 
-export function deleteLead(id: string) {
-  leads = leads.filter((l) => l.id !== id)
-  emit()
+window.addEventListener('pagehide', () => {
+  for (const [id, patch] of pending) {
+    fetch(`/api/leads/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+      keepalive: true,
+    })
+  }
+  pending.clear()
+})
+
+export async function deleteLead(id: string) {
+  const before = state.leads
+  pending.delete(id)
+  clearTimeout(timers.get(id))
+  set({ leads: before.filter((l) => l.id !== id) })
+  try {
+    await api(`/leads/${id}`, { method: 'DELETE' })
+  } catch (e) {
+    set({ leads: before })
+    reportSaveError(e)
+  }
 }
 
-export function replaceAllLeads(items: Lead[]) {
-  leads = items
-  emit()
+export async function replaceAllLeads(items: Lead[]) {
+  const saved = await api<Lead[]>('/leads', { method: 'PUT', json: items })
+  set({ leads: saved })
 }
 
-export function updateSettings(patch: Partial<Settings>) {
-  settings = { ...settings, ...patch }
-  emit()
+export async function draftEmail(id: string) {
+  await flush(id)
+  return api<{ draft: string; source: 'ai' | 'template'; error?: string }>(`/leads/${id}/draft-email`, { method: 'POST' })
 }
 
+// --- Settings ---------------------------------------------------------------------
+
+export async function updateSettings(patch: Partial<Settings>) {
+  const saved = await api<Partial<Settings>>('/settings', { method: 'PUT', json: patch })
+  set({ settings: { ...DEFAULT_SETTINGS, ...saved } })
+}

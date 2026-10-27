@@ -8,6 +8,7 @@ export default function SettingsPage() {
   const leads = useLeads()
   const [form, setForm] = useState(settings)
   const [saved, setSaved] = useState(false)
+  const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const exportJson = () => {
@@ -21,14 +22,19 @@ export default function SettingsPage() {
 
   const importJson = async (file: File | undefined) => {
     if (!file) return
+    let data: unknown
     try {
-      const data = JSON.parse(await file.text())
+      data = JSON.parse(await file.text())
       if (!Array.isArray(data)) throw new Error('not an array')
-      if (confirm(`Replace your ${leads.length} leads with ${data.length} leads from this backup?`)) {
-        replaceAllLeads(data as Lead[])
-      }
+      if (!confirm(`Replace your ${leads.length} leads with ${data.length} leads from this backup?`)) return
     } catch {
       alert("That file doesn't look like a LeadFlow backup.")
+      return
+    }
+    try {
+      await replaceAllLeads(data as Lead[])
+    } catch (e) {
+      alert(`Restore failed: ${e instanceof Error ? e.message : e}`)
     }
   }
 
@@ -38,11 +44,16 @@ export default function SettingsPage() {
 
       <form
         className="card mt-8 space-y-5 p-6"
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault()
-          updateSettings({ ...form, calendlyUrl: form.calendlyUrl.trim(), anthropicApiKey: form.anthropicApiKey.trim() })
-          setSaved(true)
-          setTimeout(() => setSaved(false), 1500)
+          setError('')
+          try {
+            await updateSettings({ ownerName: form.ownerName.trim(), calendlyUrl: form.calendlyUrl.trim() })
+            setSaved(true)
+            setTimeout(() => setSaved(false), 1500)
+          } catch (err) {
+            setError(err instanceof Error ? err.message : String(err))
+          }
         }}
       >
         <div>
@@ -60,26 +71,20 @@ export default function SettingsPage() {
           />
           <p className="mt-1.5 text-sm text-slate-400">Shown on each lead's meeting card and included in email drafts.</p>
         </div>
-        <div>
-          <label className="label">Claude API key (optional)</label>
-          <input
-            className="input font-mono"
-            type="password"
-            placeholder="sk-ant-…"
-            value={form.anthropicApiKey}
-            onChange={(e) => setForm({ ...form, anthropicApiKey: e.target.value })}
-          />
-          <p className="mt-1.5 text-sm text-slate-400">
-            Enables AI-written follow-up emails. Stored only in this browser. Without a key, drafts use a simple template.
-          </p>
+        <div className="rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          AI-written email drafts are {settings.aiEnabled ? <b>on</b> : <b>off</b>}.{' '}
+          {settings.aiEnabled
+            ? 'Drafts are written by Claude from each lead’s conversation history and notes.'
+            : 'Set ANTHROPIC_API_KEY on the Railway service to turn them on. Until then drafts use a template.'}
         </div>
+        {error && <p className="text-sm text-red-600">{error}</p>}
         <button className="btn-primary">{saved ? 'Saved' : 'Save settings'}</button>
       </form>
 
       <section className="card mt-6 p-6">
         <h2 className="section-title">Your data</h2>
         <p className="mt-2 text-sm text-slate-500">
-          Leads are saved in this browser. Export a backup regularly, or to move your leads to another computer.
+          Leads are stored in your Postgres database, so they're the same on every device. Export a JSON backup any time.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <button className="btn-secondary" onClick={exportJson}>
